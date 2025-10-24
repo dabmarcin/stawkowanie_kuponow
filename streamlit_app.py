@@ -27,6 +27,22 @@ from csv_handler import (
     backup_csv, validate_csv_structure, get_csv_info, CSV_FILE
 )
 
+# Funkcje pomocnicze
+def is_pending(row) -> bool:
+    """Sprawdza czy kupon oczekuje na rozliczenie"""
+    val = str(row.get("Wynik", "")).strip().upper()
+    return val in {"OCZEKUJE", ""}  # obsługuje stare rekordy z pustym Wynik
+
+def color_result(val):
+    """Koloruje wyniki kuponów w tabeli"""
+    v = str(val).strip().upper()
+    if v in ("WYGRANA", "W"):
+        return 'background-color: #d4edda; color: #155724;'
+    elif v in ("PRZEGRANA", "P"):
+        return 'background-color: #f8d7da; color: #721c24;'
+    else:
+        return 'background-color: #fff3cd; color: #856404;'
+
 
 # ============================================================================
 # KONFIGURACJA STRAMLIT
@@ -122,14 +138,6 @@ def display_coupons_table(rows: list):
     df = pd.DataFrame(rows)
     
     # Dodaj kolumny z kolorami dla lepszej czytelności
-    def color_result(val):
-        if val == "WYGRANA":
-            return 'background-color: #d4edda; color: #155724;'
-        elif val == "PRZEGRANA":
-            return 'background-color: #f8d7da; color: #721c24;'
-        else:
-            return 'background-color: #fff3cd; color: #856404;'
-    
     styled_df = df.style.map(color_result, subset=['Wynik'])
     
     st.dataframe(
@@ -268,46 +276,50 @@ def main():
         display_status_cards(status)
         display_game_status(status)
         
-        # Sprawdź ostatni kupon
-        last_coupon = rows[-1]
+        # A) KUPONY OCZEKUJĄCE - lista wszystkich oczekujących z przyciskami rozliczania
+        pending_coupons = [row for row in rows if is_pending(row)]
         
-        # Jeśli ostatni kupon oczekuje na rozstrzygnięcie
-        if last_coupon["Wynik"].strip().upper() == "OCZEKUJE":
-            st.header(f"⏳ Kupon #{last_coupon['Kupon']} oczekuje na rozstrzygnięcie")
+        if pending_coupons:
+            st.header("⏳ Kupony oczekujące na rozliczenie")
             
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.info(f"""
-                **Szczegóły kuponu:**
-                - Kurs: {last_coupon['Kurs']}
-                - Stawka: {last_coupon['Stawka (S)']} zł
-                - Potencjalna wygrana: {last_coupon['Wygrana brutto']} zł
-                """)
-            
-            with col2:
-                st.subheader("🎯 Rozstrzygnij wynik")
-                
-                result = st.radio(
-                    "Wynik kuponu:",
-                    ["WYGRANA", "PRZEGRANA"],
-                    format_func=lambda x: "✅ Wygrałeś" if x == "WYGRANA" else "❌ Przegrałeś"
-                )
-                
-                if st.button("✅ Rozstrzygnij kupon", type="primary"):
-                    last_coupon["Wynik"] = result
+            for coupon in pending_coupons:
+                with st.expander(
+                    f"Kupon #{coupon['Kupon']} – kurs {coupon['Kurs']} – stawka {coupon['Stawka (S)']} zł",
+                    expanded=False
+                ):
+                    col1, col2, col3 = st.columns(3)
                     
-                    if result == "PRZEGRANA":
-                        last_coupon["Wygrana brutto"] = "0.00"
+                    with col1:
+                        st.write(f"**Kurs:** {coupon['Kurs']}")
+                        st.write(f"**Stawka:** {coupon['Stawka (S)']} zł")
                     
-                    recompute_aggregates(rows)
-                    save_rows(rows)
+                    with col2:
+                        potential_win = float(coupon['Kurs']) * float(coupon['Stawka (S)'])
+                        st.write(f"**Potencjalna wygrana brutto:** {potential_win:.2f} zł")
                     
-                    st.success(f"✅ Kupon #{last_coupon['Kupon']} rozstrzygnięty jako {result}")
-                    st.rerun()
-        else:
-            # Ostatni kupon rozstrzygnięty - możliwość dodania nowego
+                    with col3:
+                        if st.button("✅ Wygrana", key=f"win_{coupon['Kupon']}"):
+                            coupon['Wynik'] = 'WYGRANA'   # pełne słowo
+                            recompute_aggregates(rows)
+                            save_rows(rows)
+                            st.success("✅ Kupon rozliczony jako WYGRANA")
+                            st.rerun()
+                        
+                        if st.button("❌ Przegrana", key=f"lose_{coupon['Kupon']}"):
+                            coupon['Wynik'] = 'PRZEGRANA' # pełne słowo
+                            coupon['Wygrana brutto'] = "0.00"
+                            recompute_aggregates(rows)
+                            save_rows(rows)
+                            st.success("❌ Kupon rozliczony jako PRZEGRANA")
+                            st.rerun()
             
+            st.markdown("---")
+        # B) DODAWANIE NOWEGO KUPONU - przycisk zawsze dostępny
+        if st.button("🎲 Nowy kupon", type="primary", use_container_width=True):
+            st.session_state.show_new_coupon = True
+            st.rerun()
+        
+        if st.session_state.get('show_new_coupon', False):
             # Sprawdź czy osiągnięto cel
             if status['net_profit'] >= st.session_state.profit_target:
                 st.header("🎉 Gratulacje!")
@@ -448,11 +460,6 @@ def main():
                     
                     st.markdown("---")
                     
-                    # Przycisk do dodania kolejnego kuponu
-                    if st.button("🎲 Dodaj kolejny kupon", type="primary", use_container_width=True):
-                        st.session_state.show_new_coupon = True
-                        st.rerun()
-                    
                     # Sprawdź czy pokazać formularz dodawania kuponu
                     if st.session_state.get('show_new_coupon', False):
                         # Nie osiągnięto celu - rekomendacja stawki
@@ -474,7 +481,7 @@ def main():
                         with col_odds2:
                             # Oblicz rekomendację na żywo
                             try:
-                                recommended = recommend_stake(status['budget'], status['target'], odds)
+                                recommended = recommend_stake(status['budget'], status['target'], odds, st.session_state.profit_target)
                                 
                                 st.metric(
                                     "💰 Rekomendowana stawka",
