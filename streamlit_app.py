@@ -605,7 +605,7 @@ def main():
                         validation_result = validate_withdrawal(status['budget'], withdrawal_amount)
                         if validation_result['valid']:
                             next_number = get_next_coupon_number(rows)
-                            withdrawal_coupon = create_withdrawal_coupon(withdrawal_amount, next_number)
+                            withdrawal_coupon = create_withdrawal_coupon(withdrawal_amount, next_number, status['sum_deposits'])
                             
                             rows.append(withdrawal_coupon)
                             recompute_aggregates(rows)

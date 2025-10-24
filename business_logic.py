@@ -351,24 +351,33 @@ def create_deposit_coupon(amount: float, next_number: int) -> Dict[str, str]:
     }
 
 
-def create_withdrawal_coupon(amount: float, next_number: int) -> Dict[str, str]:
+def create_withdrawal_coupon(amount: float, next_number: int, current_deposits: float) -> Dict[str, str]:
     """
     Tworzy kupon reprezentujący wypłatę.
+    
+    Logika wypłaty:
+    1. Najpierw zmniejszamy wkład (do 0)
+    2. Potem zmniejszamy budżet z pozostałej kwoty
     
     Args:
         amount: Kwota wypłaty.
         next_number: Numer kuponu.
+        current_deposits: Aktualny wkład (suma zasieleń).
         
     Returns:
         Słownik reprezentujący kupon wypłaty.
     """
+    # Oblicz ile z wypłaty idzie na zmniejszenie wkładu
+    deposit_reduction = min(amount, current_deposits)
+    budget_reduction = amount - deposit_reduction
+    
     return {
         "Kupon": str(next_number),
         "Nazwa": f"Wypłata {amount:.2f} zł",
         "Wynik": "PRZEGRANA",  # Wypłata to "przegrana" (zmniejsza budżet)
-        "Stawka (S)": f"{amount:.2f}",
+        "Stawka (S)": f"{budget_reduction:.2f}",  # Część która zmniejsza budżet
         "Kurs": "1.00",
-        "Zasilenie": "0.00",
+        "Zasilenie": f"{-deposit_reduction:.2f}",  # Ujemne zasilenie = zmniejszenie wkładu
         "Suma zasieleń": "0.00",  # Zostanie przeliczone
         "Suma włożona do tej pory": "0.00",  # Zostanie przeliczone
         "Wygrana brutto": "0.00",  # Zostanie przeliczone
