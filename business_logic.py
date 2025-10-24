@@ -450,3 +450,72 @@ def delete_coupons(rows: list, coupon_numbers: list) -> int:
         if delete_coupon(rows, coupon_number):
             deleted_count += 1
     return deleted_count
+
+
+def edit_coupon(rows: list, coupon_number: str, new_name: str, new_stake: float, new_odds: float) -> bool:
+    """
+    Edytuje kupon w liście.
+    
+    Args:
+        rows: Lista kuponów
+        coupon_number: Numer kuponu do edycji
+        new_name: Nowa nazwa kuponu
+        new_stake: Nowa stawka
+        new_odds: Nowy kurs
+    
+    Returns:
+        True jeśli kupon został znaleziony i edytowany, False w przeciwnym razie
+    """
+    for row in rows:
+        if row['Kupon'] == coupon_number:
+            # Edytuj tylko jeśli kupon oczekuje na rozliczenie
+            if is_pending(row):
+                row['Nazwa'] = new_name if new_name.strip() else f"Kupon #{coupon_number}"
+                row['Stawka (S)'] = f"{new_stake:.2f}"
+                row['Kurs'] = f"{new_odds:.2f}"
+                return True
+    return False
+
+
+def is_pending(row) -> bool:
+    """Sprawdza czy kupon oczekuje na rozliczenie"""
+    val = str(row.get("Wynik", "")).strip().upper()
+    return val in {"OCZEKUJE", ""}
+
+
+def save_profit_target(target: float) -> bool:
+    """
+    Zapisuje docelowy zysk do pliku.
+    
+    Args:
+        target: Docelowy zysk do zapisania
+    
+    Returns:
+        True jeśli zapisano pomyślnie, False w przeciwnym razie
+    """
+    try:
+        with open('profit_target.txt', 'w') as f:
+            f.write(str(target))
+        return True
+    except Exception as e:
+        print(f"Błąd podczas zapisywania celu: {e}")
+        return False
+
+
+def load_profit_target() -> float:
+    """
+    Wczytuje docelowy zysk z pliku.
+    
+    Returns:
+        Docelowy zysk lub domyślną wartość 100.0 jeśli plik nie istnieje
+    """
+    try:
+        if os.path.exists('profit_target.txt'):
+            with open('profit_target.txt', 'r') as f:
+                content = f.read().strip()
+                return float(content)
+        else:
+            return PROFIT_TARGET
+    except Exception as e:
+        print(f"Błąd podczas wczytywania celu: {e}")
+        return PROFIT_TARGET
