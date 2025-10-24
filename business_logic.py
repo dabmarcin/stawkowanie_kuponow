@@ -152,17 +152,17 @@ def get_current_status(rows: List[Dict[str, str]], profit_target: float = None) 
         deposit = parse_float(row.get("Zasilenie", "0")) or 0.0
         sum_deposits += deposit
         
-        # Uwzględnij tylko rozstrzygnięte kupony dla stawek i wygranych
-        if result in ["WYGRANA", "PRZEGRANA"]:
-            stake = parse_float(row["Stawka (S)"]) or 0.0
-            sum_stakes += stake
-            
-            if result == "WYGRANA":
-                odds = parse_float(row["Kurs"]) or 0.0
-                sum_wins += odds * stake
+        # Uwzględnij WSZYSTKIE stawki (włącznie z oczekującymi) dla budżetu
+        stake = parse_float(row["Stawka (S)"]) or 0.0
+        sum_stakes += stake
+        
+        # Uwzględnij tylko rozstrzygnięte wygrane
+        if result == "WYGRANA":
+            odds = parse_float(row["Kurs"]) or 0.0
+            sum_wins += odds * stake
     
     balance = sum_wins - sum_stakes  # Saldo (suma wygranych - suma stawek)
-    budget = sum_deposits + balance  # Budżet (dostępne środki = wkład + saldo)
+    budget = max(0, sum_deposits + balance)  # Budżet (dostępne środki = max(0, wkład + saldo))
     net_profit = balance  # Zysk netto = saldo (bo wkład jest osobno)
     
     # Użyj przekazanego profit_target lub domyślnego
@@ -502,6 +502,10 @@ def validate_budget_for_stake(rows: list, stake: float) -> tuple[bool, str]:
             return False, "Nie można obliczyć statusu budżetu"
         
         available_budget = status['budget']
+        
+        # Sprawdź czy budżet jest 0 (straciłeś cały wkład)
+        if available_budget <= 0:
+            return False, f"❌ Nie masz dostępnego budżetu! (budżet: {available_budget:.2f} zł) Zasil konto aby kontynuować grę."
         
         if stake > available_budget:
             return False, f"❌ Stawka {stake:.2f} zł przekracza dostępny budżet {available_budget:.2f} zł!"

@@ -25,8 +25,52 @@ from business_logic import (
 )
 from csv_handler import (
     load_rows, save_rows, migrate_old_format, create_empty_csv,
-    backup_csv, validate_csv_structure, get_csv_info, CSV_FILE
+    backup_csv, validate_csv_structure, get_csv_info, CSV_FILE,
+    create_empty_template_csv, load_csv_from_string, save_csv_to_string,
+    validate_csv_content
 )
+
+# ============================================================================
+# FUNKCJE TRYBU SESJI
+# ============================================================================
+
+def get_session_data():
+    """Pobiera dane z session_state lub zwraca pustą listę."""
+    if 'coupons_data' not in st.session_state:
+        st.session_state.coupons_data = []
+    return st.session_state.coupons_data
+
+def save_session_data(rows):
+    """Zapisuje dane do session_state."""
+    st.session_state.coupons_data = rows
+
+def clear_session_data():
+    """Czyści dane z session_state."""
+    if 'coupons_data' in st.session_state:
+        del st.session_state.coupons_data
+
+def load_csv_from_upload(uploaded_file):
+    """Wczytuje dane CSV z przesłanego pliku."""
+    try:
+        # Konwertuj bytes na string
+        csv_content = uploaded_file.read().decode('utf-8')
+        
+        # Waliduj zawartość
+        is_valid, error_message = validate_csv_content(csv_content)
+        if not is_valid:
+            st.error(f"❌ Błąd w pliku CSV: {error_message}")
+            return []
+        
+        # Wczytaj dane
+        rows = load_csv_from_string(csv_content)
+        return rows
+    except Exception as e:
+        st.error(f"❌ Błąd podczas wczytywania pliku: {e}")
+        return []
+
+def get_csv_download_data(rows):
+    """Przygotowuje dane CSV do pobrania."""
+    return save_csv_to_string(rows)
 
 # Funkcje pomocnicze
 def is_pending(row) -> bool:
@@ -72,11 +116,20 @@ def display_status_cards(status: dict):
         )
     
     with col2:
-        st.metric(
-            "🎯 Budżet",
-            f"{format_currency(status['budget'])}",
-            delta=f"Cel: {format_currency(status['target'])}"
-        )
+        # Koloruj budżet w zależności od wartości
+        budget_value = status['budget']
+        if budget_value <= 0:
+            st.metric(
+                "🎯 Budżet",
+                f"0.00 zł",
+                delta="⚠️ WYKORZYSTANY - Zasil konto!"
+            )
+        else:
+            st.metric(
+                "🎯 Budżet",
+                f"{format_currency(budget_value)}",
+                delta=f"Cel: {format_currency(status['target'])}"
+            )
     
     with col3:
         delta = status['target'] - status['budget']
@@ -144,8 +197,49 @@ def main():
     st.title("🎰 Aplikacja do Stawkowania Kuponów")
     st.caption(f"🎯 Docelowy zysk: {st.session_state.profit_target} zł")
     
-    # Wczytaj dane
-    rows = load_rows()
+    # Pobierz dane z session_state
+    rows = get_session_data()
+    
+    # Interfejs do pobierania i wczytywania plików CSV
+    if not rows:
+        st.header("📁 Zarządzanie danymi")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📥 Wczytaj dane")
+            uploaded_file = st.file_uploader(
+                "Wybierz plik CSV z danymi kuponów",
+                type=['csv'],
+                help="Wczytaj swój plik CSV z danymi kuponów"
+            )
+            
+            if uploaded_file is not None:
+                if st.button("📂 Wczytaj plik", type="primary"):
+                    rows = load_csv_from_upload(uploaded_file)
+                    if rows:
+                        # Przelicz agregaty po wczytaniu danych
+                        recompute_aggregates(rows)
+                        save_session_data(rows)
+                        st.success(f"✅ Wczytano {len(rows)} kuponów z pliku")
+                        st.rerun()
+        
+        with col2:
+            st.subheader("📤 Pobierz szablon")
+            st.info("Jeśli nie masz jeszcze pliku z danymi, pobierz pusty szablon CSV")
+            
+            # Przygotuj pusty szablon do pobrania
+            empty_csv = create_empty_template_csv()
+            
+            st.download_button(
+                label="📥 Pobierz pusty szablon CSV",
+                data=empty_csv,
+                file_name="szablon_kuponow.csv",
+                mime="text/csv",
+                help="Pobierz pusty szablon CSV, wypełnij go danymi i wczytaj z powrotem"
+            )
+        
+        st.markdown("---")
     
     # Jeśli brak danych, pokaż formularz pierwszego kuponu
     if not rows:
@@ -219,7 +313,7 @@ def main():
                     
                     rows = [first_coupon]
                     recompute_aggregates(rows)
-                    save_rows(rows)
+                    save_session_data(rows)
                     st.success("✅ Pierwszy kupon utworzony!")
                     st.rerun()
         
@@ -236,6 +330,11 @@ def main():
     st.header("📊 Bieżący stan gry")
     display_status_cards(status)
     display_game_status(status)
+    
+    # Dodatkowe ostrzeżenie gdy budżet jest 0
+    if status['budget'] <= 0:
+        st.error("🚨 **UWAGA!** Wykorzystałeś cały dostępny budżet! Nie możesz grać dalej bez zasilenia konta.")
+        st.info("💡 **Co robić:** Zasil konto w sekcji 'Zarządzanie środkami' w sidebar, aby kontynuować grę.")
     
     # A) KUPONY OCZEKUJĄCE - lista wszystkich oczekujących z przyciskami rozliczania
     pending_coupons = [row for row in rows if is_pending(row)]
@@ -263,7 +362,7 @@ def main():
                     if st.button("✅ Wygrana", key=f"win_{coupon['Kupon']}"):
                         coupon['Wynik'] = 'WYGRANA'   # pełne słowo
                         recompute_aggregates(rows)
-                        save_rows(rows)
+                        save_session_data(rows)
                         st.success("✅ Kupon rozliczony jako WYGRANA")
                         st.rerun()
                     
@@ -271,14 +370,14 @@ def main():
                         coupon['Wynik'] = 'PRZEGRANA' # pełne słowo
                         coupon['Wygrana brutto'] = "0.00"
                         recompute_aggregates(rows)
-                        save_rows(rows)
+                        save_session_data(rows)
                         st.success("❌ Kupon rozliczony jako PRZEGRANA")
                         st.rerun()
                     
                     if st.button("🗑️ Usuń", key=f"delete_{coupon['Kupon']}", type="secondary"):
                         if delete_coupon(rows, coupon['Kupon']):
                             recompute_aggregates(rows)
-                            save_rows(rows)
+                            save_session_data(rows)
                             st.success(f"✅ Usunięto kupon #{coupon['Kupon']}")
                             st.rerun()
                         else:
@@ -448,7 +547,7 @@ def main():
                         
                         rows.append(new_coupon)
                         recompute_aggregates(rows)
-                        save_rows(rows)
+                        save_session_data(rows)
                         
                         st.success(f"✅ Dodano kupon #{next_number}")
                         st.success(budget_message)  # Pokaż potwierdzenie budżetu
@@ -481,7 +580,7 @@ def main():
                     
                     rows.append(deposit_coupon)
                     recompute_aggregates(rows)
-                    save_rows(rows)
+                    save_session_data(rows)
                     st.success(f"✅ Wpłacono {deposit_amount:.2f} zł")
                     st.rerun()
         
@@ -497,17 +596,24 @@ def main():
                 )
                 
                 if st.form_submit_button("💸 Wypłać", type="primary"):
-                    if validate_withdrawal(rows, withdrawal_amount):
-                        next_number = get_next_coupon_number(rows)
-                        withdrawal_coupon = create_withdrawal_coupon(withdrawal_amount, next_number)
-                        
-                        rows.append(withdrawal_coupon)
-                        recompute_aggregates(rows)
-                        save_rows(rows)
-                        st.success(f"✅ Wypłacono {withdrawal_amount:.2f} zł")
-                        st.rerun()
+                    # Pobierz aktualny budżet
+                    status = get_current_status(rows, st.session_state.profit_target)
+                    if not status:
+                        st.error("❌ Błąd podczas obliczania statusu budżetu")
                     else:
-                        st.error("❌ Nie masz wystarczających środków na wypłatę")
+                        # Waliduj wypłatę
+                        validation_result = validate_withdrawal(status['budget'], withdrawal_amount)
+                        if validation_result['valid']:
+                            next_number = get_next_coupon_number(rows)
+                            withdrawal_coupon = create_withdrawal_coupon(withdrawal_amount, next_number)
+                            
+                            rows.append(withdrawal_coupon)
+                            recompute_aggregates(rows)
+                            save_session_data(rows)
+                            st.success(f"✅ Wypłacono {withdrawal_amount:.2f} zł")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {validation_result['error']}")
         
         # Zmiana celu
         with st.expander("🎯 Zmiana celu", expanded=False):
@@ -593,7 +699,7 @@ def main():
                             if st.form_submit_button("✅ Zapisz zmiany", type="primary"):
                                 if edit_coupon(rows, selected_coupon, new_name, new_stake, new_odds):
                                     recompute_aggregates(rows)
-                                    save_rows(rows)
+                                    save_session_data(rows)
                                     st.success(f"✅ Kupon #{selected_coupon} został edytowany")
                                     st.rerun()
                                 else:
@@ -610,7 +716,7 @@ def main():
             if st.button(f"🗑️ Usuń ostatni kupon ({last_coupon_name})", type="secondary", use_container_width=True):
                 if delete_coupon(rows, last_coupon['Kupon']):
                     recompute_aggregates(rows)
-                    save_rows(rows)
+                    save_session_data(rows)
                     st.success(f"✅ Usunięto kupon #{last_coupon['Kupon']}")
                     st.rerun()
                 else:
@@ -639,7 +745,7 @@ def main():
                         deleted_count = delete_coupons(rows, selected_coupons)
                         if deleted_count > 0:
                             recompute_aggregates(rows)
-                            save_rows(rows)
+                            save_session_data(rows)
                             st.success(f"✅ Usunięto {deleted_count} kuponów")
                             st.rerun()
                         else:
@@ -648,6 +754,39 @@ def main():
                         st.warning("⚠️ Wybierz kupony do usunięcia")
             else:
                 st.info("Brak kuponów w bazie danych")
+        
+        st.markdown("---")
+        st.subheader("📁 Zarządzanie plikami")
+        
+        # Przycisk do pobrania aktualnych danych
+        if rows:
+            csv_data = get_csv_download_data(rows)
+            st.download_button(
+                label="📥 Pobierz dane CSV",
+                data=csv_data,
+                file_name=f"kupony_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                help="Pobierz aktualne dane kuponów jako plik CSV"
+            )
+        
+        # Przycisk do wczytania nowego pliku
+        with st.expander("📂 Wczytaj nowy plik CSV", expanded=False):
+            new_uploaded_file = st.file_uploader(
+                "Wybierz nowy plik CSV",
+                type=['csv'],
+                help="Wczytaj nowy plik CSV (zastąpi obecne dane)",
+                key="new_file_uploader"
+            )
+            
+            if new_uploaded_file is not None:
+                if st.button("🔄 Zastąp dane nowym plikiem", type="secondary"):
+                    new_rows = load_csv_from_upload(new_uploaded_file)
+                    if new_rows:
+                        # Przelicz agregaty po wczytaniu danych
+                        recompute_aggregates(new_rows)
+                        save_session_data(new_rows)
+                        st.success(f"✅ Zastąpiono dane - wczytano {len(new_rows)} kuponów")
+                        st.rerun()
         
         st.markdown("---")
         st.subheader("🔧 Opcje")
@@ -666,7 +805,7 @@ def main():
             
             with col1:
                 if st.button("✅ Tak, usuń", type="primary"):
-                    create_empty_csv()
+                    clear_session_data()
                     st.success("✅ Baza danych wyczyszczona")
                     st.session_state.show_delete_confirm = False
                     st.rerun()

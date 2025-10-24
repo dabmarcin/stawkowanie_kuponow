@@ -4,11 +4,13 @@
 Moduł obsługi plików CSV dla aplikacji stawkowania kuponów.
 
 Zawiera funkcje do wczytywania, zapisywania i migracji danych CSV.
+Obsługuje tryb sesji (dane w pamięci) oraz tryb plikowy.
 """
 
 import csv
 import os
-from typing import List, Dict
+import io
+from typing import List, Dict, Optional
 
 
 # ============================================================================
@@ -217,3 +219,105 @@ def get_csv_info() -> Dict[str, any]:
             print(f"❌ Błąd podczas pobierania informacji o pliku: {e}")
     
     return info
+
+
+# ============================================================================
+# FUNKCJE TRYBU SESJI (DANE W PAMIĘCI)
+# ============================================================================
+
+def create_empty_template_csv() -> str:
+    """
+    Tworzy pusty szablon CSV w pamięci i zwraca jako string.
+    
+    Returns:
+        String zawierający pusty CSV z nagłówkami.
+    """
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=CSV_HEADERS)
+    writer.writeheader()
+    return output.getvalue()
+
+
+def load_csv_from_string(csv_content: str) -> List[Dict[str, str]]:
+    """
+    Wczytuje dane CSV z stringa.
+    
+    Args:
+        csv_content: Zawartość pliku CSV jako string.
+        
+    Returns:
+        Lista słowników reprezentujących kupony.
+    """
+    try:
+        reader = csv.DictReader(io.StringIO(csv_content))
+        rows = list(reader)
+        
+        # Sprawdź czy to stary format (bez kolumny "Zasilenie")
+        if reader.fieldnames and "Zasilenie" not in reader.fieldnames:
+            print(f"⚠️  Wykryto stary format CSV. Migruję do nowego formatu...")
+            rows = migrate_old_format(rows)
+            print(f"✅ Migracja zakończona!")
+        # Walidacja nagłówków
+        elif reader.fieldnames != CSV_HEADERS:
+            print(f"⚠️  Uwaga: Nagłówki w pliku nie pasują do oczekiwanych.")
+            print(f"   Oczekiwane: {CSV_HEADERS}")
+            print(f"   Znalezione: {reader.fieldnames}")
+            
+        return rows
+    except Exception as e:
+        print(f"❌ Błąd podczas wczytywania CSV z stringa: {e}")
+        return []
+
+
+def save_csv_to_string(rows: List[Dict[str, str]]) -> str:
+    """
+    Zapisuje wiersze do stringa CSV.
+    
+    Args:
+        rows: Lista słowników z danymi kuponów.
+        
+    Returns:
+        String zawierający dane CSV.
+    """
+    try:
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=CSV_HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue()
+    except Exception as e:
+        print(f"❌ Błąd podczas zapisywania CSV do stringa: {e}")
+        return ""
+
+
+def validate_csv_content(csv_content: str) -> tuple[bool, str]:
+    """
+    Waliduje zawartość pliku CSV.
+    
+    Args:
+        csv_content: Zawartość pliku CSV jako string.
+        
+    Returns:
+        Tuple (is_valid, error_message).
+    """
+    try:
+        reader = csv.DictReader(io.StringIO(csv_content))
+        fieldnames = reader.fieldnames
+        
+        if not fieldnames:
+            return False, "Plik CSV nie zawiera nagłówków"
+        
+        # Sprawdź czy wszystkie wymagane kolumny są obecne
+        missing_headers = [header for header in CSV_HEADERS if header not in fieldnames]
+        if missing_headers:
+            return False, f"Brakujące nagłówki: {', '.join(missing_headers)}"
+        
+        # Sprawdź czy nie ma nieznanych nagłówków
+        extra_headers = [header for header in fieldnames if header not in CSV_HEADERS]
+        if extra_headers:
+            return False, f"Nieznane nagłówki: {', '.join(extra_headers)}"
+        
+        return True, "Plik CSV jest prawidłowy"
+        
+    except Exception as e:
+        return False, f"Błąd podczas walidacji CSV: {e}"
