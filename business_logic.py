@@ -7,6 +7,7 @@ Zawiera funkcje do obliczania stawek, statusu gry i rekomendacji.
 """
 
 import math
+import os
 from typing import List, Dict, Optional
 
 
@@ -481,6 +482,34 @@ def is_pending(row) -> bool:
     """Sprawdza czy kupon oczekuje na rozliczenie"""
     val = str(row.get("Wynik", "")).strip().upper()
     return val in {"OCZEKUJE", ""}
+
+
+def validate_budget_for_stake(rows: list, stake: float) -> tuple[bool, str]:
+    """
+    Sprawdza czy stawka nie przekracza dostępnego budżetu.
+    
+    Args:
+        rows: Lista kuponów
+        stake: Stawka do sprawdzenia
+    
+    Returns:
+        Tuple (is_valid, message)
+    """
+    try:
+        # Pobierz aktualny status
+        status = get_current_status(rows, PROFIT_TARGET)
+        if not status:
+            return False, "Nie można obliczyć statusu budżetu"
+        
+        available_budget = status['budget']
+        
+        if stake > available_budget:
+            return False, f"❌ Stawka {stake:.2f} zł przekracza dostępny budżet {available_budget:.2f} zł!"
+        
+        return True, f"✅ Stawka {stake:.2f} zł jest w budżecie (dostępne: {available_budget:.2f} zł)"
+    
+    except Exception as e:
+        return False, f"Błąd podczas sprawdzania budżetu: {e}"
 
 
 def save_profit_target(target: float) -> bool:

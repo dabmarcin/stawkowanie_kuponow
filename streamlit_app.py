@@ -20,7 +20,8 @@ from business_logic import (
     calculate_potential_result, get_next_coupon_number, format_currency,
     get_game_status, validate_odds, validate_stake, parse_float,
     validate_withdrawal, create_deposit_coupon, create_withdrawal_coupon,
-    get_transaction_history, PROFIT_TARGET, delete_coupon, delete_coupons
+    get_transaction_history, PROFIT_TARGET, delete_coupon, delete_coupons,
+    edit_coupon, save_profit_target, load_profit_target, validate_budget_for_stake
 )
 from csv_handler import (
     load_rows, save_rows, migrate_old_format, create_empty_csv,
@@ -95,7 +96,7 @@ def display_status_cards(status: dict):
 
 def display_coupons_table(rows: list):
     """
-    Wyświetla tabelę kuponów z opcjami usuwania.
+    Wyświetla tabelę kuponów.
     """
     if not rows:
         st.info("📋 Brak kuponów w bazie danych.")
@@ -112,61 +113,6 @@ def display_coupons_table(rows: list):
         use_container_width=True,
         height=400
     )
-    
-    # Sekcja usuwania kuponów
-    st.markdown("---")
-    st.subheader("🗑️ Zarządzanie kuponami")
-    
-    # Opcja usuwania pojedynczego kuponu
-    st.markdown("**Usuń pojedynczy kupon:**")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        coupon_numbers = [row["Kupon"] for row in rows]
-        selected_coupon = st.selectbox(
-            "Wybierz kupon do usunięcia:",
-            coupon_numbers,
-            format_func=lambda x: next((row['Nazwa'] for row in rows if row['Kupon'] == x), f"Kupon #{x}"),
-            key="delete_single_coupon"
-        )
-    
-    with col2:
-        if st.button("🗑️ Usuń kupon", type="secondary", key="delete_single_btn"):
-            if delete_coupon(rows, selected_coupon):
-                recompute_aggregates(rows)
-                save_rows(rows)
-                st.success(f"✅ Usunięto kupon #{selected_coupon}")
-                st.rerun()
-            else:
-                st.error(f"❌ Nie znaleziono kuponu #{selected_coupon}")
-    
-    # Opcja usuwania wielu kuponów
-    st.markdown("**Usuń wiele kuponów:**")
-    
-    # Lista do wyboru wielu kuponów
-    selected_coupons = st.multiselect(
-        "Wybierz kupony do usunięcia:",
-        coupon_numbers,
-        format_func=lambda x: next((row['Nazwa'] for row in rows if row['Kupon'] == x), f"Kupon #{x}"),
-        key="delete_multiple_coupons"
-    )
-    
-    if selected_coupons:
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.warning(f"⚠️ Zaznaczono {len(selected_coupons)} kuponów do usunięcia")
-        
-        with col2:
-            if st.button("🗑️ Usuń zaznaczone", type="secondary", key="delete_multiple_btn"):
-                deleted_count = delete_coupons(rows, selected_coupons)
-                if deleted_count > 0:
-                    recompute_aggregates(rows)
-                    save_rows(rows)
-                    st.success(f"✅ Usunięto {deleted_count} kuponów")
-                    st.rerun()
-                else:
-                    st.error("❌ Nie udało się usunąć żadnego kuponu")
 
 
 def display_game_status(status: dict):
@@ -190,9 +136,9 @@ def display_game_status(status: dict):
 def main():
     """Główna funkcja aplikacji."""
     
-    # Inicjalizuj profit_target w session_state
+    # Inicjalizuj profit_target w session_state z pliku
     if 'profit_target' not in st.session_state:
-        st.session_state.profit_target = PROFIT_TARGET
+        st.session_state.profit_target = load_profit_target()
     
     # Nagłówek aplikacji
     st.title("🎰 Aplikacja do Stawkowania Kuponów")
@@ -387,19 +333,32 @@ def main():
         else:
             st.info("✅ Jesteś na plusie - możesz grać własną stawką")
         
-        # Pokaż potencjalny wynik
+        # Pokaż potencjalny wynik i sprawdź budżet
         if custom_stake > 0 and odds > 1:
             potential_win = odds * custom_stake
             potential_profit = custom_stake * (odds - 1)
             new_budget = status['budget'] - custom_stake + potential_win
             
-            st.metric(
-                "💡 Potencjalny wynik",
-                f"{potential_win:.2f} zł",
-                delta=f"Zysk: {format_currency(potential_profit)}"
-            )
+            # Sprawdź czy stawka jest w budżecie
+            budget_valid, budget_message = validate_budget_for_stake(rows, custom_stake)
             
-            st.caption(f"Nowy budżet po wygranej: {new_budget:.2f} zł")
+            if budget_valid:
+                st.metric(
+                    "💡 Potencjalny wynik",
+                    f"{potential_win:.2f} zł",
+                    delta=f"Zysk: {format_currency(potential_profit)}"
+                )
+                st.caption(f"Nowy budżet po wygranej: {new_budget:.2f} zł")
+                st.success(budget_message)
+            else:
+                st.metric(
+                    "💡 Potencjalny wynik",
+                    f"{potential_win:.2f} zł",
+                    delta=f"Zysk: {format_currency(potential_profit)}"
+                )
+                st.caption(f"Nowy budżet po wygranej: {new_budget:.2f} zł")
+                st.error(budget_message)
+                st.warning("⚠️ Nie możesz grać tą stawką - przekracza dostępny budżet!")
         
         # Formularz z przyciskami
         with st.form("add_coupon_universal"):
@@ -459,29 +418,42 @@ def main():
                 elif not validate_stake(stake):
                     st.error("❌ Stawka musi być większa niż 0!")
                 else:
-                    next_number = get_next_coupon_number(rows)
+                    # Sprawdź czy stawka nie przekracza budżetu
+                    budget_valid, budget_message = validate_budget_for_stake(rows, stake)
                     
-                    new_coupon = {
-                        "Kupon": str(next_number),
-                        "Nazwa": coupon_name if coupon_name.strip() else f"Kupon #{next_number}",
-                        "Wynik": "OCZEKUJE",
-                        "Stawka (S)": f"{stake:.2f}",
-                        "Kurs": f"{odds:.2f}",
-                        "Zasilenie": f"{deposit:.2f}",
-                        "Suma zasieleń": "0.00",
-                        "Suma włożona do tej pory": "0.00",
-                        "Wygrana brutto": "0.00",
-                        "Saldo": "0.00",
-                        "Zysk netto": "0.00"
-                    }
-                    
-                    rows.append(new_coupon)
-                    recompute_aggregates(rows)
-                    save_rows(rows)
-                    
-                    st.success(f"✅ Dodano kupon #{next_number}")
-                    st.session_state.show_new_coupon = False
-                    st.rerun()
+                    if not budget_valid:
+                        st.error(budget_message)
+                        # Pokaż opcję zasilenia
+                        if deposit > 0:
+                            st.info("💡 Możesz zasilić konto w polu 'Zasilenie' poniżej")
+                        else:
+                            st.info("💡 Zwiększ budżet poprzez zasilenie konta w sekcji 'Zarządzanie środkami'")
+                    else:
+                        # Walidacja przeszła - dodaj kupon
+                        next_number = get_next_coupon_number(rows)
+                        
+                        new_coupon = {
+                            "Kupon": str(next_number),
+                            "Nazwa": coupon_name if coupon_name.strip() else f"Kupon #{next_number}",
+                            "Wynik": "OCZEKUJE",
+                            "Stawka (S)": f"{stake:.2f}",
+                            "Kurs": f"{odds:.2f}",
+                            "Zasilenie": f"{deposit:.2f}",
+                            "Suma zasieleń": "0.00",
+                            "Suma włożona do tej pory": "0.00",
+                            "Wygrana brutto": "0.00",
+                            "Saldo": "0.00",
+                            "Zysk netto": "0.00"
+                        }
+                        
+                        rows.append(new_coupon)
+                        recompute_aggregates(rows)
+                        save_rows(rows)
+                        
+                        st.success(f"✅ Dodano kupon #{next_number}")
+                        st.success(budget_message)  # Pokaż potwierdzenie budżetu
+                        st.session_state.show_new_coupon = False
+                        st.rerun()
     
     # Wyświetl tabelę kuponów
     st.header("📋 Historia kuponów")
@@ -550,7 +522,10 @@ def main():
                 
                 if st.form_submit_button("🎯 Zmień cel", type="primary"):
                     st.session_state.profit_target = new_target
-                    st.success(f"✅ Cel zmieniony na {new_target:.0f} zł")
+                    if save_profit_target(new_target):
+                        st.success(f"✅ Cel zmieniony na {new_target:.0f} zł i zapisany")
+                    else:
+                        st.error("❌ Błąd podczas zapisywania celu")
                     st.rerun()
         
         # Historia transakcji
@@ -568,7 +543,67 @@ def main():
         st.markdown("---")
         st.subheader("🗑️ Zarządzanie kuponami")
         
-        # Szybkie usuwanie ostatniego kuponu
+        # Edytuj kupon
+        with st.expander("✏️ Edytuj kupon", expanded=False):
+            if rows:
+                # Lista kuponów oczekujących na rozliczenie
+                pending_coupons = [row for row in rows if is_pending(row)]
+                
+                if pending_coupons:
+                    with st.form("edit_coupon_form"):
+                        # Wybór kuponu do edycji
+                        selected_coupon = st.selectbox(
+                            "Wybierz kupon do edycji:",
+                            [row['Kupon'] for row in pending_coupons],
+                            format_func=lambda x: next((row['Nazwa'] for row in pending_coupons if row['Kupon'] == x), f"Kupon #{x}"),
+                            key="edit_coupon_select"
+                        )
+                        
+                        # Znajdź wybrany kupon
+                        coupon_to_edit = next((row for row in pending_coupons if row['Kupon'] == selected_coupon), None)
+                        
+                        if coupon_to_edit:
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                new_name = st.text_input(
+                                    "Nazwa kuponu",
+                                    value=coupon_to_edit.get('Nazwa', ''),
+                                    key="edit_name"
+                                )
+                                new_stake = st.number_input(
+                                    "Stawka",
+                                    min_value=0.01,
+                                    step=0.01,
+                                    value=float(coupon_to_edit.get('Stawka (S)', 0)),
+                                    format="%.2f",
+                                    key="edit_stake"
+                                )
+                            
+                            with col2:
+                                new_odds = st.number_input(
+                                    "Kurs",
+                                    min_value=1.01,
+                                    step=0.01,
+                                    value=float(coupon_to_edit.get('Kurs', 1.01)),
+                                    format="%.2f",
+                                    key="edit_odds"
+                                )
+                            
+                            if st.form_submit_button("✅ Zapisz zmiany", type="primary"):
+                                if edit_coupon(rows, selected_coupon, new_name, new_stake, new_odds):
+                                    recompute_aggregates(rows)
+                                    save_rows(rows)
+                                    st.success(f"✅ Kupon #{selected_coupon} został edytowany")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Nie udało się edytować kuponu")
+                else:
+                    st.info("Brak kuponów oczekujących na rozliczenie")
+            else:
+                st.info("Brak kuponów w bazie danych")
+        
+        # Usuń ostatni kupon
         if rows:
             last_coupon = rows[-1]
             last_coupon_name = last_coupon.get('Nazwa', f"#{last_coupon['Kupon']}")
@@ -580,6 +615,39 @@ def main():
                     st.rerun()
                 else:
                     st.error(f"❌ Nie udało się usunąć kuponu #{last_coupon['Kupon']}")
+        
+        # Usuń wybrane kupony
+        with st.expander("🗑️ Usuń wybrane kupony", expanded=False):
+            if rows:
+                with st.form("delete_multiple_form"):
+                    # Lista wszystkich kuponów
+                    coupon_numbers = [row["Kupon"] for row in rows]
+                    selected_coupons = st.multiselect(
+                        "Wybierz kupony do usunięcia:",
+                        coupon_numbers,
+                        format_func=lambda x: next((row['Nazwa'] for row in rows if row['Kupon'] == x), f"Kupon #{x}"),
+                        key="delete_multiple_sidebar"
+                    )
+                    
+                    if selected_coupons:
+                        st.warning(f"⚠️ Zaznaczono {len(selected_coupons)} kuponów do usunięcia")
+                    
+                    # Przycisk submit zawsze dostępny
+                    submitted = st.form_submit_button("🗑️ Usuń zaznaczone", type="secondary")
+                    
+                    if submitted and selected_coupons:
+                        deleted_count = delete_coupons(rows, selected_coupons)
+                        if deleted_count > 0:
+                            recompute_aggregates(rows)
+                            save_rows(rows)
+                            st.success(f"✅ Usunięto {deleted_count} kuponów")
+                            st.rerun()
+                        else:
+                            st.error("❌ Nie udało się usunąć żadnego kuponu")
+                    elif submitted and not selected_coupons:
+                        st.warning("⚠️ Wybierz kupony do usunięcia")
+            else:
+                st.info("Brak kuponów w bazie danych")
         
         st.markdown("---")
         st.subheader("🔧 Opcje")
