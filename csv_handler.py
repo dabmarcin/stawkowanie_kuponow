@@ -18,6 +18,7 @@ from typing import List, Dict
 CSV_FILE = "baza_kuponow.csv"
 CSV_HEADERS = [
     "Kupon",
+    "Nazwa",
     "Wynik",
     "Stawka (S)",
     "Kurs",
@@ -104,6 +105,7 @@ def migrate_old_format(old_rows: List[Dict[str, str]], initial_deposit: float = 
     for i, old_row in enumerate(old_rows):
         new_row = {
             "Kupon": old_row.get("Kupon", str(i+1)),
+            "Nazwa": old_row.get("Nazwa", f"Kupon #{old_row.get('Kupon', str(i+1))}"),
             "Wynik": old_row.get("Wynik", "OCZEKUJE"),
             "Stawka (S)": old_row.get("Stawka (S)", "0.00"),
             "Kurs": old_row.get("Kurs", "1.00"),

@@ -20,7 +20,7 @@ from business_logic import (
     calculate_potential_result, get_next_coupon_number, format_currency,
     get_game_status, validate_odds, validate_stake, parse_float,
     validate_withdrawal, create_deposit_coupon, create_withdrawal_coupon,
-    get_transaction_history, PROFIT_TARGET
+    get_transaction_history, PROFIT_TARGET, delete_coupon, delete_coupons
 )
 from csv_handler import (
     load_rows, save_rows, migrate_old_format, create_empty_csv,
@@ -128,7 +128,7 @@ def display_status_cards(status: dict):
 
 def display_coupons_table(rows: list):
     """
-    Wyświetla tabelę kuponów.
+    Wyświetla tabelę kuponów z opcjami usuwania.
     """
     if not rows:
         st.info("📋 Brak kuponów w bazie danych.")
@@ -145,6 +145,61 @@ def display_coupons_table(rows: list):
         use_container_width=True,
         height=400
     )
+    
+    # Sekcja usuwania kuponów
+    st.markdown("---")
+    st.subheader("🗑️ Zarządzanie kuponami")
+    
+    # Opcja usuwania pojedynczego kuponu
+    st.markdown("**Usuń pojedynczy kupon:**")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        coupon_numbers = [row["Kupon"] for row in rows]
+        selected_coupon = st.selectbox(
+            "Wybierz kupon do usunięcia:",
+            coupon_numbers,
+            format_func=lambda x: next((row['Nazwa'] for row in rows if row['Kupon'] == x), f"Kupon #{x}"),
+            key="delete_single_coupon"
+        )
+    
+    with col2:
+        if st.button("🗑️ Usuń kupon", type="secondary", key="delete_single_btn"):
+            if delete_coupon(rows, selected_coupon):
+                recompute_aggregates(rows)
+                save_rows(rows)
+                st.success(f"✅ Usunięto kupon #{selected_coupon}")
+                st.rerun()
+            else:
+                st.error(f"❌ Nie znaleziono kuponu #{selected_coupon}")
+    
+    # Opcja usuwania wielu kuponów
+    st.markdown("**Usuń wiele kuponów:**")
+    
+    # Lista do wyboru wielu kuponów
+    selected_coupons = st.multiselect(
+        "Wybierz kupony do usunięcia:",
+        coupon_numbers,
+        format_func=lambda x: next((row['Nazwa'] for row in rows if row['Kupon'] == x), f"Kupon #{x}"),
+        key="delete_multiple_coupons"
+    )
+    
+    if selected_coupons:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.warning(f"⚠️ Zaznaczono {len(selected_coupons)} kuponów do usunięcia")
+        
+        with col2:
+            if st.button("🗑️ Usuń zaznaczone", type="secondary", key="delete_multiple_btn"):
+                deleted_count = delete_coupons(rows, selected_coupons)
+                if deleted_count > 0:
+                    recompute_aggregates(rows)
+                    save_rows(rows)
+                    st.success(f"✅ Usunięto {deleted_count} kuponów")
+                    st.rerun()
+                else:
+                    st.error("❌ Nie udało się usunąć żadnego kuponu")
 
 
 def display_game_status(status: dict):
@@ -218,6 +273,14 @@ def main():
             )
             
             st.subheader("🎲 Szczegóły pierwszego kuponu")
+            
+            # Pole nazwy
+            coupon_name = st.text_input(
+                "Nazwa kuponu",
+                placeholder="np. Mecz Real vs Barcelona",
+                help="Wpisz opisową nazwę dla tego kuponu"
+            )
+            
             col1, col2 = st.columns(2)
             
             with col1:
@@ -249,6 +312,7 @@ def main():
                     # Utwórz pierwszy kupon
                     first_coupon = {
                         "Kupon": "1",
+                        "Nazwa": coupon_name if coupon_name.strip() else "Kupon #1",
                         "Wynik": "OCZEKUJE",
                         "Stawka (S)": f"{stake:.2f}",
                         "Kurs": f"{odds:.2f}",
@@ -283,8 +347,9 @@ def main():
             st.header("⏳ Kupony oczekujące na rozliczenie")
             
             for coupon in pending_coupons:
+                coupon_name = coupon.get('Nazwa', f"Kupon #{coupon['Kupon']}")
                 with st.expander(
-                    f"Kupon #{coupon['Kupon']} – kurs {coupon['Kurs']} – stawka {coupon['Stawka (S)']} zł",
+                    f"{coupon_name} – kurs {coupon['Kurs']} – stawka {coupon['Stawka (S)']} zł",
                     expanded=False
                 ):
                     col1, col2, col3 = st.columns(3)
@@ -312,6 +377,15 @@ def main():
                             save_rows(rows)
                             st.success("❌ Kupon rozliczony jako PRZEGRANA")
                             st.rerun()
+                        
+                        if st.button("🗑️ Usuń", key=f"delete_{coupon['Kupon']}", type="secondary"):
+                            if delete_coupon(rows, coupon['Kupon']):
+                                recompute_aggregates(rows)
+                                save_rows(rows)
+                                st.success(f"✅ Usunięto kupon #{coupon['Kupon']}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Nie udało się usunąć kuponu #{coupon['Kupon']}")
             
             st.markdown("---")
         # B) DODAWANIE NOWEGO KUPONU - przycisk zawsze dostępny
@@ -335,6 +409,14 @@ def main():
                 
                 if st.session_state.get('show_new_coupon', False):
                     with st.form("add_coupon_no_rec"):
+                        # Pole nazwy
+                        coupon_name = st.text_input(
+                            "Nazwa kuponu",
+                            placeholder="np. Mecz Real vs Barcelona",
+                            help="Wpisz opisową nazwę dla tego kuponu",
+                            key="name_no_rec"
+                        )
+                        
                         col1, col2 = st.columns(2)
                         
                         with col1:
@@ -404,6 +486,7 @@ def main():
                                 
                                 new_coupon = {
                                     "Kupon": str(next_number),
+                                    "Nazwa": coupon_name if coupon_name.strip() else f"Kupon #{next_number}",
                                     "Wynik": "OCZEKUJE",
                                     "Stawka (S)": f"{stake:.2f}",
                                     "Kurs": f"{odds:.2f}",
@@ -464,6 +547,14 @@ def main():
                     if st.session_state.get('show_new_coupon', False):
                         # Nie osiągnięto celu - rekomendacja stawki
                         st.header("🎲 Dodaj kolejny kupon z rekomendacją")
+                        
+                        # Pole nazwy
+                        coupon_name = st.text_input(
+                            "Nazwa kuponu",
+                            placeholder="np. Mecz Real vs Barcelona",
+                            help="Wpisz opisową nazwę dla tego kuponu",
+                            key="name_with_rec_pending"
+                        )
                         
                         # Pole kursu POZA formularzem - automatyczne odświeżanie
                         col_odds1, col_odds2 = st.columns([1, 1])
@@ -567,6 +658,7 @@ def main():
                                     
                                     new_coupon = {
                                         "Kupon": str(next_number),
+                                        "Nazwa": coupon_name if coupon_name.strip() else f"Kupon #{next_number}",
                                         "Wynik": "OCZEKUJE",
                                         "Stawka (S)": f"{stake:.2f}",
                                         "Kurs": f"{odds:.2f}",
@@ -747,6 +839,7 @@ def main():
                                     
                                     new_coupon = {
                                         "Kupon": str(next_number),
+                                        "Nazwa": coupon_name if coupon_name.strip() else f"Kupon #{next_number}",
                                         "Wynik": "OCZEKUJE",
                                         "Stawka (S)": f"{stake:.2f}",
                                         "Kurs": f"{odds:.2f}",
@@ -876,6 +969,22 @@ def main():
                             st.warning(f"💸 {transaction['description']} (Kupon #{transaction['coupon']})")
                 else:
                     st.info("Brak transakcji")
+            
+            st.markdown("---")
+            st.subheader("🗑️ Zarządzanie kuponami")
+            
+            # Szybkie usuwanie ostatniego kuponu
+            if rows:
+                last_coupon = rows[-1]
+                last_coupon_name = last_coupon.get('Nazwa', f"#{last_coupon['Kupon']}")
+                if st.button(f"🗑️ Usuń ostatni kupon ({last_coupon_name})", type="secondary", use_container_width=True):
+                    if delete_coupon(rows, last_coupon['Kupon']):
+                        recompute_aggregates(rows)
+                        save_rows(rows)
+                        st.success(f"✅ Usunięto kupon #{last_coupon['Kupon']}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Nie udało się usunąć kuponu #{last_coupon['Kupon']}")
             
             st.markdown("---")
             st.subheader("🔧 Opcje")

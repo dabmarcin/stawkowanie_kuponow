@@ -337,6 +337,7 @@ def create_deposit_coupon(amount: float, next_number: int) -> Dict[str, str]:
     """
     return {
         "Kupon": str(next_number),
+        "Nazwa": f"Wpłata {amount:.2f} zł",
         "Wynik": "WYGRANA",  # Wpłata to "wygrana"
         "Stawka (S)": "0.00",
         "Kurs": "1.00",
@@ -362,6 +363,7 @@ def create_withdrawal_coupon(amount: float, next_number: int) -> Dict[str, str]:
     """
     return {
         "Kupon": str(next_number),
+        "Nazwa": f"Wypłata {amount:.2f} zł",
         "Wynik": "PRZEGRANA",  # Wypłata to "przegrana" (zmniejsza budżet)
         "Stawka (S)": f"{amount:.2f}",
         "Kurs": "1.00",
@@ -412,3 +414,39 @@ def get_transaction_history(rows: List[Dict[str, str]]) -> List[Dict[str, any]]:
                 })
     
     return transactions
+
+
+def delete_coupon(rows: list, coupon_number: str) -> bool:
+    """
+    Usuwa kupon o podanym numerze z listy.
+    
+    Args:
+        rows: Lista kuponów
+        coupon_number: Numer kuponu do usunięcia
+    
+    Returns:
+        bool: True jeśli kupon został usunięty, False jeśli nie znaleziono
+    """
+    for i, row in enumerate(rows):
+        if row.get("Kupon") == coupon_number:
+            del rows[i]
+            return True
+    return False
+
+
+def delete_coupons(rows: list, coupon_numbers: list) -> int:
+    """
+    Usuwa wiele kuponów z listy.
+    
+    Args:
+        rows: Lista kuponów
+        coupon_numbers: Lista numerów kuponów do usunięcia
+    
+    Returns:
+        int: Liczba usuniętych kuponów
+    """
+    deleted_count = 0
+    for coupon_number in coupon_numbers:
+        if delete_coupon(rows, coupon_number):
+            deleted_count += 1
+    return deleted_count
